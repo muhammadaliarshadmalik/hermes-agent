@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "description": "Fake tasks for MockScorer tests. Pass probabilities are made up and prove nothing about real Hermes performance.",
+  "tasks": [
+    {"task_id": "task_01", "split": "train", "base_pass_prob": 0.9},
+    {"task_id": "task_02", "split": "train", "base_pass_prob": 0.8},
+    {"task_id": "task_03", "split": "train", "base_pass_prob": 0.7},
+    {"task_id": "task_04", "split": "train", "base_pass_prob": 0.6},
+    {"task_id": "task_05", "split": "train", "base_pass_prob": 0.5},
+    {"task_id": "task_06", "split": "train", "base_pass_prob": 0.5},
+    {"task_id": "task_07", "split": "train", "base_pass_prob": 0.4},
+    {"task_id": "task_08", "split": "train", "base_pass_prob": 0.3},
+    {"task_id": "task_09", "split": "heldout", "base_pass_prob": 0.8},
+    {"task_id": "task_10", "split": "heldout", "base_pass_prob": 0.6},
+    {"task_id": "task_11", "split": "heldout", "base_pass_prob": 0.5},
+    {"task_id": "task_12", "split": "heldout", "base_pass_prob": 0.4}
+  ],
+  "candidate_bonus": {
+    "candidate-001": 0.3,
+    "candidate-002": -0.3
+  },
+  "scripted_outcomes": {
+    "candidate-003": {
+      "task_01": "error",
+      "task_02": "timeout",
+      "task_03": "failed"
+    }
+  }
+}
