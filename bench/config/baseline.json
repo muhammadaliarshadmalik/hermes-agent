@@ -1,0 +1,8 @@
+{
+  "pinned_commit": "d1b46d718ffe675427928eff7e5fff69bcb4519b",
+  "pinned_tag": "hermes-baseline-d1b46d7",
+  "default_timeout_seconds": 120.0,
+  "default_max_steps": 15,
+  "default_repeat": 3,
+  "default_seed": 42
+}
