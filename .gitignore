@@ -339,4 +339,11 @@ infografico/
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
-bench/runs/ 
+bench/runs/
+
+# B1 local working artifacts — never commit
+b1_changes.zip
+b1_full.zip
+changed_files.txt
+zip_contents.txt
+repomix-*.md

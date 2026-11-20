@@ -3,8 +3,10 @@
 Bundle layout (policy-only): <candidate>/bundle.json + <candidate>/<policy_file>.
 `skills_dir` in bundle.json, if present, is ignored.
 
-Live mode calls run_agent.AIAgent (signature verified against the pinned run_agent.py).
-Mock mode runs offline: no model, deterministic from --seed.
+Live mode calls run_agent.AIAgent (signature verified against the pinned run_agent.py) with an
+isolated per-task HERMES_HOME (set before AIAgent, restored in finally, deleted after) so runs
+never read or write the user's global ~/.hermes. Mock mode runs offline: no model, deterministic
+from --seed.
 """
 from __future__ import annotations
 
@@ -13,6 +15,8 @@ import json
 import os
 import platform
 import random
+import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -30,6 +34,7 @@ from bench.trajectories.capture import TrajectoryWriter, trajectory_ref
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_CFG = REPO_ROOT / "bench" / "config" / "baseline.json"
 MAX_POLICY_BYTES = 64 * 1024
+_TEXT_EXTS = {".yaml", ".yml", ".md", ".txt", ".json"}
 
 
 class BundleError(ValueError):
@@ -70,10 +75,41 @@ def load_bundle(path: Path | str) -> Bundle:
         raise BundleError("bundle.json: policy_file must be inside the bundle directory")
     if not policy_path.is_file():
         raise BundleError(f"policy file not found: {pf}")
-    raw = policy_path.read_bytes().replace(bytes([13,10]),bytes([10]))
+    raw = policy_path.read_bytes().replace(bytes([13, 10]), bytes([10]))
     if len(raw) > MAX_POLICY_BYTES:
         raise BundleError(f"policy file exceeds {MAX_POLICY_BYTES} bytes")
     return Bundle(cid, meta.get("parent_id"), raw.decode("utf-8"), hashlib.sha256(raw).hexdigest(), root)
+
+
+def hash_directory(path: Path | str) -> str:
+    """B2-compatible candidate hash: 'sha256:<hex>'.
+
+    Algorithm (agreed with B2): sorted POSIX relative paths; for each regular file,
+    an 8-byte big-endian path length, the path bytes, an 8-byte big-endian content
+    length, and the content bytes. CRLF is normalized to LF inside .yaml/.yml/.md/
+    .txt/.json files. Symlinks and empty directories are rejected.
+    """
+    root = Path(path).resolve()
+    h = hashlib.sha256()
+    for p in sorted(root.rglob("*"), key=lambda q: q.relative_to(root).as_posix()):
+        rel = p.relative_to(root).as_posix()
+        if p.is_symlink():
+            raise BundleError(f"symlink not allowed in candidate: {rel}")
+        if p.is_dir():
+            if not any(p.iterdir()):
+                raise BundleError(f"empty directory not allowed in candidate: {rel}")
+            continue
+        if not p.is_file():
+            continue
+        data = p.read_bytes()
+        if p.suffix.lower() in _TEXT_EXTS:
+            data = data.replace(b"\r\n", b"\n")
+        rel_b = rel.encode("utf-8")
+        h.update(struct.pack(">Q", len(rel_b)))
+        h.update(rel_b)
+        h.update(struct.pack(">Q", len(data)))
+        h.update(data)
+    return "sha256:" + h.hexdigest()
 
 
 def _utc_now() -> str:
@@ -106,25 +142,36 @@ def _live_agent(task: Task, bundle: Bundle, ws: Path, model: str, provider: Opti
                 timeout: float, max_steps: int, traj: TrajectoryWriter) -> Dict[str, int]:
     from run_agent import AIAgent  # lazy: mock mode and tests never import Hermes
 
-    kwargs: Dict[str, Any] = dict(
-        model=model, max_iterations=max_steps, run_budget_seconds=timeout,
-        quiet_mode=True, save_trajectories=False,
-        ephemeral_system_prompt=bundle.policy_text,
-        skip_context_files=True, skip_memory=True, skip_background_review=True,
-        cwd=str(ws),
-    )
-    if provider:
-        kwargs["provider"] = provider
-    agent = AIAgent(**kwargs)
-    result = agent.run_conversation(task.prompt)
-    for m in result.get("messages", []):
-        traj.event("message", message=m)
-    traj.event("agent_result", completed=result.get("completed"), api_calls=result.get("api_calls"),
-               final_response=result.get("final_response"))
-    tokens = getattr(agent, "session_total_tokens", 0) or (
-        getattr(agent, "session_input_tokens", 0) + getattr(agent, "session_output_tokens", 0))
-    steps = result.get("api_calls") or getattr(agent, "session_api_calls", 0) or 0
-    return {"tokens": int(tokens), "steps": int(steps)}
+    # Isolated HERMES_HOME per task: never reads or writes the user's ~/.hermes.
+    prev_home = os.environ.get("HERMES_HOME")
+    isolated_home = tempfile.mkdtemp(prefix="benchhome_")
+    os.environ["HERMES_HOME"] = isolated_home
+    try:
+        kwargs: Dict[str, Any] = dict(
+            model=model, max_iterations=max_steps, run_budget_seconds=timeout,
+            quiet_mode=True, save_trajectories=False,
+            ephemeral_system_prompt=bundle.policy_text,
+            skip_context_files=True, skip_memory=True, skip_background_review=True,
+            cwd=str(ws),
+        )
+        if provider:
+            kwargs["provider"] = provider
+        agent = AIAgent(**kwargs)
+        result = agent.run_conversation(task.prompt)
+        for m in result.get("messages", []):
+            traj.event("message", message=m)
+        traj.event("agent_result", completed=result.get("completed"), api_calls=result.get("api_calls"),
+                   final_response=result.get("final_response"))
+        tokens = getattr(agent, "session_total_tokens", 0) or (
+            getattr(agent, "session_input_tokens", 0) + getattr(agent, "session_output_tokens", 0))
+        steps = result.get("api_calls") or getattr(agent, "session_api_calls", 0) or 0
+        return {"tokens": int(tokens), "steps": int(steps)}
+    finally:
+        if prev_home is None:
+            os.environ.pop("HERMES_HOME", None)
+        else:
+            os.environ["HERMES_HOME"] = prev_home
+        shutil.rmtree(isolated_home, ignore_errors=True)
 
 
 def run_task(task: Task, bundle: Bundle, *, run_id: str, out_dir: Path, repeat: Optional[int],
@@ -173,6 +220,7 @@ def run_split(candidate_path: Path | str, split: str, *, repeat: int, seed: int,
     """Run every task of `split` `repeat` times. Raises PermissionError for sealed heldout."""
     tasks = list_tasks_for_split(split)  # enforces the held-out gate
     bundle = load_bundle(candidate_path)
+    candidate_hash = hash_directory(candidate_path)
     run_id = make_run_id(bundle.candidate_id, split)
     out_dir = Path(out) if out else REPO_ROOT / "bench" / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -186,7 +234,8 @@ def run_split(candidate_path: Path | str, split: str, *, repeat: int, seed: int,
             for t in tasks])
     summary = {
         "run_id": run_id, "candidate_id": bundle.candidate_id, "parent_id": bundle.parent_id,
-        "policy_sha256": bundle.policy_sha256, "split": split, "repeat": repeat, "seed": seed,
+        "policy_sha256": bundle.policy_sha256, "candidate_hash": candidate_hash,
+        "split": split, "repeat": repeat, "seed": seed,
         "timeout_seconds": timeout, "max_steps": max_steps, "model": model, "provider": provider,
         "mock": mock, "started_at": started, "finished_at": _utc_now(),
         "python": sys.version.split()[0], "platform": platform.platform(),

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from bench.runner.executor import BundleError, load_bundle
+from bench.runner.executor import BundleError, hash_directory, load_bundle
 from bench.scorer.report import FIELDS, validate_score_report
 from bench.tasks.catalog import HELDOUT_ENV
 
@@ -18,8 +18,8 @@ def _bundle(d: Path, with_skills_dir=False, policy="# p\n", policy_file="policy.
     meta = {"candidate_id": "candidate-t", "parent_id": None, "description": "t", "policy_file": policy_file}
     if with_skills_dir:
         meta["skills_dir"] = "skills"
-    (d / "bundle.json").write_text(json.dumps(meta), encoding="utf-8")
-    (d / "policy.md").write_text(policy, encoding="utf-8")
+    (d / "bundle.json").write_text(json.dumps(meta), encoding="utf-8", newline="")
+    (d / "policy.md").write_text(policy, encoding="utf-8", newline="")
     return d
 
 
@@ -61,6 +61,7 @@ def test_mock_train_run_outputs_are_schema_valid(tmp_path):
     assert len(list((out / "trajectories").glob("*.jsonl"))) == 36
     s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert s["repeat"] == 3 and s["mock"] is True and s["split"] == "train"
+    assert s["candidate_hash"].startswith("sha256:") and len(s["candidate_hash"]) == 7 + 64
     assert s["aggregate"]["repeats"] == 3 and len(s["task_ids"]) == 12
 
 
@@ -108,3 +109,67 @@ def test_bad_candidate_exit_1(tmp_path):
 def test_real_candidate_000_loads():
     b = load_bundle(ROOT / "evolve" / "artifacts" / "candidate-000")
     assert b.candidate_id == "candidate-000" and b.policy_text.strip()
+    assert hash_directory(ROOT / "evolve" / "artifacts" / "candidate-000").startswith("sha256:")
+
+
+def test_candidate_hash_prefix_and_stability(tmp_path):
+    b = _bundle(tmp_path / "c")
+    h1 = hash_directory(b)
+    h2 = hash_directory(b)
+    assert h1 == h2 and h1.startswith("sha256:") and len(h1) == 7 + 64
+
+
+def test_candidate_hash_crlf_equivalent(tmp_path):
+    a = _bundle(tmp_path / "a", policy="# p\n")
+    b = _bundle(tmp_path / "b", policy="# p\r\n")
+    assert hash_directory(a) == hash_directory(b)
+
+
+def test_candidate_hash_rejects_symlink(tmp_path):
+    b = _bundle(tmp_path / "c")
+    target = tmp_path / "outside.txt"
+    target.write_text("x", encoding="utf-8")
+    link = b / "link.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available on this host")
+    with pytest.raises(BundleError):
+        hash_directory(b)
+
+
+def test_candidate_hash_rejects_empty_dir(tmp_path):
+    b = _bundle(tmp_path / "c")
+    (b / "empty").mkdir()
+    with pytest.raises(BundleError):
+        hash_directory(b)
+
+
+def test_live_agent_sets_and_restores_hermes_home(monkeypatch, tmp_path):
+    from bench.runner.executor import Bundle, _live_agent
+    from bench.tasks.catalog import get_task
+    from bench.trajectories.capture import TrajectoryWriter
+
+    seen = {}
+
+    class FakeAgent:
+        def __init__(self, **kw):
+            seen["HERMES_HOME"] = os.environ.get("HERMES_HOME")
+            self.session_total_tokens = 11
+
+        def run_conversation(self, prompt):
+            return {"messages": [], "completed": True, "api_calls": 2, "final_response": "ok"}
+
+    monkeypatch.setattr("run_agent.AIAgent", FakeAgent, raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    task = get_task("train-001-fix-off-by-one")
+    bundle = Bundle("candidate-t", None, "# p\n", "deadbeef", tmp_path)
+    traj = TrajectoryWriter(tmp_path / "t.jsonl")
+    try:
+        usage = _live_agent(task, bundle, tmp_path, model="m", provider=None,
+                            timeout=5.0, max_steps=2, traj=traj)
+    finally:
+        traj.close()
+    assert usage["tokens"] == 11 and usage["steps"] == 2
+    assert seen["HERMES_HOME"] and "benchhome_" in seen["HERMES_HOME"]
+    assert "HERMES_HOME" not in os.environ
