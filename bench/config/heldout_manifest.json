@@ -1,0 +1,11 @@
+{
+  "split": "heldout",
+  "version": 1,
+  "sealed": true,
+  "task_ids": [
+    "heldout-001-interval-merger",
+    "heldout-002-nested-config-diff",
+    "heldout-003-rate-limiter-bug",
+    "heldout-004-dependency-cycle"
+  ]
+}

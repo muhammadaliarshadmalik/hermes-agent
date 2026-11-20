@@ -1,0 +1,18 @@
+{
+  "split": "train",
+  "version": 1,
+  "task_ids": [
+    "train-001-fix-off-by-one",
+    "train-002-json-normalizer",
+    "train-003-csv-aggregator",
+    "train-004-cli-arg-parser",
+    "train-005-log-error-extractor",
+    "train-006-ini-to-json",
+    "train-007-markdown-toc",
+    "train-008-semver-sorter",
+    "train-009-env-template-check",
+    "train-010-sqlite-migration",
+    "train-011-dedup-preserve-order",
+    "train-012-http-status-summary"
+  ]
+}
