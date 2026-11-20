@@ -1,6 +1,6 @@
 # Week 1 verification (B1)
 
-Pinned commit: <paste from docs\pinned_commit.txt>
+Pinned commit: d1b46d718ffe675427928eff7e5fff69bcb4519b
 
 ## 1. Trajectory module
 - Save/load file: `agent/trajectory.py` (2,573 bytes)
@@ -28,7 +28,7 @@ Pinned commit: <paste from docs\pinned_commit.txt>
 - The memory layer is invoked BY the review fork, not the other way around.
 
 ## 5. Subagents: shared process or separate?
-- Not yet verified. Needs a separate probe (later).
+- Deferred. This probe does not affect scorer fairness, runner correctness, or held-out integrity, and is not on the critical path to baseline or evolution. Revisit only if a task requires subagent isolation.
 
 ## 6. jcode retrieval/extraction
 - Not yet read. Pending (Team A territory, B1 not blocked).

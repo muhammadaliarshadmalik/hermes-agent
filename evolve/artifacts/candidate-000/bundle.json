@@ -2,6 +2,5 @@
   "candidate_id": "candidate-000",
   "parent_id": null,
   "description": "Version-0 baseline instruction-policy bundle (no learned edits)",
-  "policy_file": "policy.md",
-  "skills_dir": "skills"
+  "policy_file": "policy.md"
 }
