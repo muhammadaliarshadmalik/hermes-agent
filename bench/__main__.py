@@ -9,7 +9,7 @@ from bench.tasks.catalog import HELDOUT_ENV
 
 
 def main(argv=None) -> int:
-    from bench.runner.executor import BundleError, load_baseline_config, run_split
+    from bench.runner.executor import BundleError, UnknownTaskError, load_baseline_config, run_split
 
     cfg = load_baseline_config()
     ap = argparse.ArgumentParser(prog="python -m bench")
@@ -24,6 +24,8 @@ def main(argv=None) -> int:
     r.add_argument("--max-steps", type=int, default=cfg["default_max_steps"])
     r.add_argument("--model", default=None)
     r.add_argument("--provider", default=None)
+    r.add_argument("--task-id", action="append", default=None, metavar="ID",
+                   help="run only this task (repeatable); must belong to --split")
     r.add_argument("--mock", action="store_true", help="offline deterministic run, no model")
     a = ap.parse_args(argv)
 
@@ -38,20 +40,25 @@ def main(argv=None) -> int:
         return 2
     try:
         s = run_split(a.candidate, a.split, repeat=a.repeat, seed=a.seed, out=a.out, timeout=a.timeout,
-                      max_steps=a.max_steps, model=a.model, provider=a.provider, mock=a.mock)
+                      max_steps=a.max_steps, model=a.model, provider=a.provider, mock=a.mock,
+                      task_ids=a.task_id)
     except PermissionError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except UnknownTaskError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     except BundleError as e:
         print(f"error: invalid candidate bundle: {e}", file=sys.stderr)
-        return 1
+        return 2
     suite = s["aggregate"]["suite"]["pass_rate"]
     print(f"run_id={s['run_id']} candidate={s['candidate_id']} split={s['split']} repeat={s['repeat']} mock={s['mock']}")
     print(f"pass_rate mean={suite['mean']:.3f} std={suite['std']:.3f}")
     flaky = [t for t, v in s["aggregate"]["per_task"].items() if v["flaky"]]
     print(f"flaky_tasks={flaky}")
+    print(f"error_or_timeout={s['error_or_timeout']}")
     print(f"out={s['out_dir']}")
-    return 0
+    return 1 if s["error_or_timeout"] else 0
 
 
 if __name__ == "__main__":
