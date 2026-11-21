@@ -191,11 +191,14 @@ def run_task(task: Task, bundle: Bundle, *, run_id: str, out_dir: Path, repeat: 
         traj.event("task_start", task_id=task.task_id, split=task.split, candidate_id=bundle.candidate_id,
                    policy_sha256=bundle.policy_sha256, model=model, provider=provider, mock=mock,
                    seed=seed, timeout=timeout, max_steps=max_steps)
+        stage = "harness"
         try:
+            stage = "mock" if mock else "hermes"
             if mock:
                 usage = _mock_agent(task, ws, seed, repeat or 1, traj)
             else:
                 usage = _live_agent(task, bundle, ws, model, provider, timeout, max_steps, traj)
+            stage = "harness"
             res = validate_task(task, ws)
             traj.event("validation", passed=res.passed, reason=res.reason)
             elapsed = time.monotonic() - t0
@@ -206,7 +209,7 @@ def run_task(task: Task, bundle: Bundle, *, run_id: str, out_dir: Path, repeat: 
             else:
                 outcome, reason = "failed", res.reason or "validator failed"
         except Exception as e:  # agent/infra error, not a task failure
-            outcome, reason = "error", f"{type(e).__name__}: {e}"[:300]
+            outcome, reason = "error", f"[{stage}] {type(e).__name__}: {e}"[:300]
             traj.event("error", error=reason)
         elapsed = time.monotonic() - t0
         traj.event("task_end", outcome=outcome, time_seconds=round(elapsed, 3), **usage)
