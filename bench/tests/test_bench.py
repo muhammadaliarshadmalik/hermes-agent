@@ -238,3 +238,26 @@ def test_exit_1_when_a_task_errors(tmp_path, monkeypatch):
     assert r["outcome"] == "error" and "RuntimeError" in r["failure_reason"]
     s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert s["error_or_timeout"] == 1 and s["finished_at"]
+
+
+def test_error_attribution_agent_vs_harness(tmp_path, monkeypatch):
+    import bench.runner.executor as ex
+    from bench.__main__ import main
+
+    def run_once(name):
+        out = tmp_path / name
+        main(["run", "--candidate", str(_bundle(tmp_path / ("c" + name))), "--split", "train", "--repeat", "1",
+              "--mock", "--task-id", "train-008-semver-sorter", "--out", str(out)])
+        return json.loads(next((out / "reports").glob("*.json")).read_text(encoding="utf-8"))
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    with monkeypatch.context() as m:
+        m.setattr(ex, "_mock_agent", boom)
+        r = run_once("agent")
+    assert r["outcome"] == "error" and r["failure_reason"].startswith("[mock] RuntimeError")
+    with monkeypatch.context() as m:
+        m.setattr(ex, "validate_task", boom)
+        r = run_once("harness")
+    assert r["outcome"] == "error" and r["failure_reason"].startswith("[harness] RuntimeError")
