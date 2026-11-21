@@ -101,9 +101,9 @@ def test_live_requires_model(tmp_path):
     assert p.returncode == 2 and "--model" in p.stderr
 
 
-def test_bad_candidate_exit_1(tmp_path):
+def test_bad_candidate_exit_2(tmp_path):
     p = _cli("run", "--candidate", str(tmp_path / "nope"), "--split", "train", "--mock", "--out", str(tmp_path / "o"))
-    assert p.returncode == 1 and "invalid candidate bundle" in p.stderr
+    assert p.returncode == 2 and "invalid candidate bundle" in p.stderr
 
 
 def test_real_candidate_000_loads():
@@ -173,3 +173,68 @@ def test_live_agent_sets_and_restores_hermes_home(monkeypatch, tmp_path):
     assert usage["tokens"] == 11 and usage["steps"] == 2
     assert seen["HERMES_HOME"] and "benchhome_" in seen["HERMES_HOME"]
     assert "HERMES_HOME" not in os.environ
+
+
+def test_task_id_runs_only_that_task(tmp_path):
+    out = tmp_path / "o"
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--repeat", "2", "--mock",
+             "--task-id", "train-008-semver-sorter", "--out", str(out))
+    assert p.returncode == 0, p.stderr
+    names = sorted(x.name for x in (out / "reports").glob("*.json"))
+    assert names == ["train-008-semver-sorter__r1.json", "train-008-semver-sorter__r2.json"]
+    s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert s["task_ids"] == ["train-008-semver-sorter"] and s["partial"] is True
+
+
+def test_task_id_repeatable_keeps_manifest_order(tmp_path):
+    out = tmp_path / "o"
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--repeat", "1", "--mock",
+             "--task-id", "train-008-semver-sorter", "--task-id", "train-002-json-normalizer", "--out", str(out))
+    assert p.returncode == 0, p.stderr
+    s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert s["task_ids"] == ["train-002-json-normalizer", "train-008-semver-sorter"]
+
+
+def test_task_id_unknown_exit_2(tmp_path):
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--mock",
+             "--task-id", "train-999-nope", "--out", str(tmp_path / "o"))
+    assert p.returncode == 2 and "train-999-nope" in p.stderr
+
+
+def test_task_id_heldout_id_cannot_run_under_train_and_is_not_leaked(tmp_path):
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--mock",
+             "--task-id", "heldout-001-interval-merger", "--out", str(tmp_path / "o"))
+    assert p.returncode == 2
+    assert "heldout-002" not in p.stderr and "heldout-003" not in p.stderr
+
+
+def test_task_id_heldout_still_needs_gate(tmp_path):
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "heldout", "--mock",
+             "--task-id", "heldout-001-interval-merger", "--out", str(tmp_path / "o"))
+    assert p.returncode == 2 and "sealed" in p.stderr
+
+
+def test_exit_0_when_tasks_fail_but_none_error(tmp_path):
+    out = tmp_path / "o"
+    p = _cli("run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--repeat", "1", "--mock",
+             "--out", str(out))
+    s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert s["error_or_timeout"] == 0 and p.returncode == 0
+
+
+def test_exit_1_when_a_task_errors(tmp_path, monkeypatch):
+    import bench.runner.executor as ex
+    from bench.__main__ import main
+
+    def boom(*a, **k):
+        raise RuntimeError("agent crashed")
+
+    monkeypatch.setattr(ex, "_mock_agent", boom)
+    out = tmp_path / "o"
+    rc = main(["run", "--candidate", str(_bundle(tmp_path / "c")), "--split", "train", "--repeat", "1",
+               "--mock", "--task-id", "train-008-semver-sorter", "--out", str(out)])
+    assert rc == 1
+    r = json.loads(next((out / "reports").glob("*.json")).read_text(encoding="utf-8"))
+    assert r["outcome"] == "error" and "RuntimeError" in r["failure_reason"]
+    s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert s["error_or_timeout"] == 1 and s["finished_at"]

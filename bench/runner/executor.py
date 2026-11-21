@@ -41,6 +41,10 @@ class BundleError(ValueError):
     pass
 
 
+class UnknownTaskError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class Bundle:
     candidate_id: str
@@ -216,9 +220,20 @@ def run_task(task: Task, bundle: Bundle, *, run_id: str, out_dir: Path, repeat: 
 
 def run_split(candidate_path: Path | str, split: str, *, repeat: int, seed: int,
               out: Optional[Path | str], timeout: float, max_steps: int,
-              model: Optional[str], provider: Optional[str], mock: bool) -> Dict[str, Any]:
-    """Run every task of `split` `repeat` times. Raises PermissionError for sealed heldout."""
+              model: Optional[str], provider: Optional[str], mock: bool,
+              task_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Run every task of `split` (or only `task_ids`) `repeat` times.
+
+    Raises PermissionError for sealed heldout, UnknownTaskError for ids not in the split.
+    """
     tasks = list_tasks_for_split(split)  # enforces the held-out gate
+    if task_ids:
+        wanted = list(dict.fromkeys(task_ids))
+        known = {t.task_id for t in tasks}
+        unknown = [i for i in wanted if i not in known]
+        if unknown:
+            raise UnknownTaskError(f"not in split {split!r}: {unknown}")
+        tasks = [t for t in tasks if t.task_id in set(wanted)]  # manifest order
     bundle = load_bundle(candidate_path)
     candidate_hash = hash_directory(candidate_path)
     run_id = make_run_id(bundle.candidate_id, split)
@@ -232,6 +247,7 @@ def run_split(candidate_path: Path | str, split: str, *, repeat: int, seed: int,
             run_task(t, bundle, run_id=run_id, out_dir=out_dir, repeat=rep, seed=seed + r - 1,
                      timeout=timeout, max_steps=max_steps, model=model, provider=provider, mock=mock)
             for t in tasks])
+    error_or_timeout = sum(1 for rs in per_repeat for r in rs if r["outcome"] in ("error", "timeout"))
     summary = {
         "run_id": run_id, "candidate_id": bundle.candidate_id, "parent_id": bundle.parent_id,
         "policy_sha256": bundle.policy_sha256, "candidate_hash": candidate_hash,
@@ -241,6 +257,8 @@ def run_split(candidate_path: Path | str, split: str, *, repeat: int, seed: int,
         "python": sys.version.split()[0], "platform": platform.platform(),
         "pinned_commit": load_baseline_config().get("pinned_commit"),
         "task_ids": [t.task_id for t in tasks],
+        "partial": bool(task_ids),
+        "error_or_timeout": error_or_timeout,
         "aggregate": aggregate(per_repeat),
     }
     with open(out_dir / "summary.json", "w", encoding="utf-8", newline="\n") as f:
